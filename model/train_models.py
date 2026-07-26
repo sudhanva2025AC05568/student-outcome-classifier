@@ -1,16 +1,13 @@
 """
-Student outcome classification - model training and evaluation.
+Trains six classifiers on the UCI student-outcome dataset and reports how each one does.
 
-Workflow:
-    1. Place the dataset at data/raw_dataset.csv
-    2. Adjust the settings block (source_file, label_column)
-    3. Run:  py model/train_models.py
+Run it with:  py model/train_models.py
 
-Produces:
-    model/*.joblib          fitted pipelines (preprocessing bundled with each classifier)
-    model/target_map.joblib label encoder for the outcome column
-    test_data.csv           hold-out slice used by the Streamlit app
-    metrics.csv             score summary for the README
+After it finishes you get:
+  - one .joblib per model inside model/ (each bundles the preprocessing)
+  - target_map.joblib  -> converts Dropout/Enrolled/Graduate <-> numbers
+  - test_data.csv      -> the 20% we held back, used by the Streamlit app
+  - metrics.csv        -> the score table that goes into the README
 """
 
 import os
@@ -35,134 +32,141 @@ from sklearn.tree import DecisionTreeClassifier
 
 warnings.filterwarnings("ignore")
 
-# ------------------------------- settings -------------------------------
-source_file = "data/raw_dataset.csv"   # downloaded UCI file
-label_column = "Target"                # outcome column in the CSV
-columns_to_remove = []                 # any id-style columns to discard
-holdout_fraction = 0.2
-seed = 42
-output_folder = "model"
-# ------------------------------------------------------------------------
+# ----- things I might want to change -----
+CSV_PATH = "data/raw_dataset.csv"   # the file downloaded from UCI
+OUTCOME_COL = "Target"              # column we are trying to predict
+DROP_THESE = []                     # id-like columns to throw away, if any
+TEST_FRACTION = 0.2
+SEED = 42
+SAVE_DIR = "model"
+# -----------------------------------------
 
 
-def make_feature_pipeline(features_frame):
-    """Numeric columns: median-fill then standardise.
-       Categorical columns: mode-fill then one-hot."""
-    number_columns = features_frame.select_dtypes(include=np.number).columns.tolist()
-    text_columns = [col for col in features_frame.columns if col not in number_columns]
+def build_preprocessing(feature_df):
+    # Split columns by type: numbers get scaled, text gets one-hot encoded.
+    numeric_cols = feature_df.select_dtypes(include=np.number).columns.tolist()
+    categorical_cols = [c for c in feature_df.columns if c not in numeric_cols]
 
-    number_branch = Pipeline([
-        ("fill_gaps", SimpleImputer(strategy="median")),
-        ("standardise", StandardScaler()),
+    # numbers: fill any gaps with the median, then put everything on the same scale
+    numeric_steps = Pipeline([
+        ("fill", SimpleImputer(strategy="median")),
+        ("scale", StandardScaler()),
     ])
 
-    # argument name changed across scikit-learn versions
+    # OneHotEncoder renamed an argument between sklearn versions, so try both
     try:
-        encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+        onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     except TypeError:
-        encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
+        onehot = OneHotEncoder(handle_unknown="ignore", sparse=False)
 
-    text_branch = Pipeline([
-        ("fill_gaps", SimpleImputer(strategy="most_frequent")),
-        ("one_hot", encoder),
+    categorical_steps = Pipeline([
+        ("fill", SimpleImputer(strategy="most_frequent")),
+        ("encode", onehot),
     ])
 
     return ColumnTransformer([
-        ("numbers", number_branch, number_columns),
-        ("categories", text_branch, text_columns),
+        ("num", numeric_steps, numeric_cols),
+        ("cat", categorical_steps, categorical_cols),
     ])
 
 
-def compute_auc(truth, class_probs, class_count):
-    """Area under ROC, handling binary and multiclass separately."""
+def roc_auc(y_actual, probabilities, num_classes):
+    # AUC is calculated differently for 2 classes vs more than 2.
     try:
-        if class_count == 2:
-            return roc_auc_score(truth, class_probs[:, 1])
-        return roc_auc_score(truth, class_probs, multi_class="ovr", average="macro")
+        if num_classes == 2:
+            return roc_auc_score(y_actual, probabilities[:, 1])
+        return roc_auc_score(y_actual, probabilities, multi_class="ovr", average="macro")
     except Exception:
         return float("nan")
 
 
-def score_model(model_label, fitted_pipeline, features_test, truth_test, class_count):
-    predictions = fitted_pipeline.predict(features_test)
-    class_probs = fitted_pipeline.predict_proba(features_test)
-    averaging = "binary" if class_count == 2 else "weighted"
+def get_scores(name, model, X_test, y_test, num_classes):
+    # Run the model on the test set and collect all six metrics.
+    y_hat = model.predict(X_test)
+    probs = model.predict_proba(X_test)
+    avg = "binary" if num_classes == 2 else "weighted"
 
     return {
-        "ML Model Name": model_label,
-        "Accuracy": accuracy_score(truth_test, predictions),
-        "AUC": compute_auc(truth_test, class_probs, class_count),
-        "Precision": precision_score(truth_test, predictions, average=averaging, zero_division=0),
-        "Recall": recall_score(truth_test, predictions, average=averaging, zero_division=0),
-        "F1": f1_score(truth_test, predictions, average=averaging, zero_division=0),
-        "MCC": matthews_corrcoef(truth_test, predictions),
+        "ML Model Name": name,
+        "Accuracy": accuracy_score(y_test, y_hat),
+        "AUC": roc_auc(y_test, probs, num_classes),
+        "Precision": precision_score(y_test, y_hat, average=avg, zero_division=0),
+        "Recall": recall_score(y_test, y_hat, average=avg, zero_division=0),
+        "F1": f1_score(y_test, y_hat, average=avg, zero_division=0),
+        "MCC": matthews_corrcoef(y_test, y_hat),
     }
 
 
-def run():
-    os.makedirs(output_folder, exist_ok=True)
+def main():
+    os.makedirs(SAVE_DIR, exist_ok=True)
 
-    dataset = pd.read_csv(source_file, sep=";")
-    if columns_to_remove:
-        dataset = dataset.drop(columns=[c for c in columns_to_remove if c in dataset.columns])
-    dataset = dataset.dropna(subset=[label_column])
+    # load the data (UCI file uses ; as separator)
+    student_data = pd.read_csv(CSV_PATH, sep=";")
+    if DROP_THESE:
+        student_data = student_data.drop(columns=[c for c in DROP_THESE if c in student_data.columns])
+    student_data = student_data.dropna(subset=[OUTCOME_COL])
 
-    print(f"Loaded {dataset.shape[0]} rows x {dataset.shape[1] - 1} features")
-    if dataset.shape[0] < 500 or (dataset.shape[1] - 1) < 12:
+    print(f"Loaded {student_data.shape[0]} rows x {student_data.shape[1] - 1} features")
+    if student_data.shape[0] < 500 or (student_data.shape[1] - 1) < 12:
         print("WARNING: needs >= 500 instances and >= 12 features.")
 
-    features = dataset.drop(columns=[label_column])
-    outcome_text = dataset[label_column]
+    # separate features from the outcome, and turn the text outcome into numbers
+    X = student_data.drop(columns=[OUTCOME_COL])
+    y_text = student_data[OUTCOME_COL]
 
-    target_map = LabelEncoder()
-    outcome = target_map.fit_transform(outcome_text)
-    class_count = len(target_map.classes_)
-    print(f"Outcome classes ({class_count}): {list(target_map.classes_)}")
+    label_map = LabelEncoder()
+    y = label_map.fit_transform(y_text)
+    num_classes = len(label_map.classes_)
+    print(f"Outcome classes ({num_classes}): {list(label_map.classes_)}")
 
-    keep_ratio = outcome if np.min(np.bincount(outcome)) >= 2 else None
-    features_train, features_test, outcome_train, outcome_test = train_test_split(
-        features, outcome, test_size=holdout_fraction, random_state=seed, stratify=keep_ratio
+    # keep the class ratio the same in train and test
+    strat = y if np.min(np.bincount(y)) >= 2 else None
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=TEST_FRACTION, random_state=SEED, stratify=strat
     )
 
-    # Persist the hold-out slice (original text labels) for the app.
-    holdout = features_test.copy()
-    holdout[label_column] = target_map.inverse_transform(outcome_test)
-    holdout.to_csv("test_data.csv", index=False)
-    print(f"Wrote test_data.csv ({len(holdout)} rows)")
+    # save the test slice with readable labels so the app can use it
+    test_slice = X_test.copy()
+    test_slice[OUTCOME_COL] = label_map.inverse_transform(y_test)
+    test_slice.to_csv("test_data.csv", index=False)
+    print(f"Wrote test_data.csv ({len(test_slice)} rows)")
 
-    classifiers = {
-        "Logistic Regression": LogisticRegression(max_iter=2000, random_state=seed),
-        "Decision Tree": DecisionTreeClassifier(max_depth=8, random_state=seed),
+    # the six classifiers I'm comparing
+    models = {
+        "Logistic Regression": LogisticRegression(max_iter=2000, random_state=SEED),
+        "Decision Tree": DecisionTreeClassifier(max_depth=8, random_state=SEED),
         "kNN": KNeighborsClassifier(n_neighbors=7),
         "Naive Bayes": GaussianNB(),
-        "Random Forest": RandomForestClassifier(n_estimators=300, random_state=seed),
-        "Gradient Boosting": GradientBoostingClassifier(random_state=seed),
+        "Random Forest": RandomForestClassifier(n_estimators=300, random_state=SEED),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=SEED),
     }
 
-    summary = []
-    for model_label, estimator in classifiers.items():
-        pipeline = Pipeline([
-            ("prepare", make_feature_pipeline(features_train)),
-            ("model", estimator),
+    results = []
+    for name, model in models.items():
+        # glue preprocessing and the model together so they travel as one unit
+        full_model = Pipeline([
+            ("preprocess", build_preprocessing(X_train)),
+            ("classifier", model),
         ])
-        pipeline.fit(features_train, outcome_train)
+        full_model.fit(X_train, y_train)
 
-        summary.append(score_model(model_label, pipeline, features_test, outcome_test, class_count))
+        results.append(get_scores(name, full_model, X_test, y_test, num_classes))
 
-        saved_name = model_label.lower().replace(" ", "_") + ".joblib"
-        joblib.dump(pipeline, os.path.join(output_folder, saved_name))
-        print(f"  trained + saved: {saved_name}")
+        file_name = name.lower().replace(" ", "_") + ".joblib"
+        joblib.dump(full_model, os.path.join(SAVE_DIR, file_name))
+        print(f"  trained + saved: {file_name}")
 
-    joblib.dump(target_map, os.path.join(output_folder, "target_map.joblib"))
+    # the encoder is needed by the app to decode predictions back to words
+    joblib.dump(label_map, os.path.join(SAVE_DIR, "target_map.joblib"))
 
-    score_table = pd.DataFrame(summary).round(4)
-    score_table.to_csv("metrics.csv", index=False)
+    scores_df = pd.DataFrame(results).round(4)
+    scores_df.to_csv("metrics.csv", index=False)
 
     print("\n=== Comparison Table (paste into README.md) ===")
-    print(score_table.to_markdown(index=False))
-    top = score_table.loc[score_table["F1"].idxmax(), "ML Model Name"]
-    print(f"\nHighest F1: {top}")
+    print(scores_df.to_markdown(index=False))
+    winner = scores_df.loc[scores_df["F1"].idxmax(), "ML Model Name"]
+    print(f"\nHighest F1: {winner}")
 
 
 if __name__ == "__main__":
-    run()
+    main()

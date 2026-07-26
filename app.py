@@ -1,8 +1,10 @@
 """
-ML Assignment 2 -- Streamlit front-end.
+Streamlit app for the student-outcome classifiers.
 
-Run locally:  streamlit run app.py
-Expects the model/ folder produced by train_models.py.
+Upload the test CSV, choose a model, and see how it performs.
+Needs the model/ folder created by train_models.py.
+
+Local run:  py -m streamlit run app.py
 """
 
 import glob
@@ -18,136 +20,148 @@ from sklearn.metrics import (accuracy_score, classification_report,
                              confusion_matrix, f1_score, matthews_corrcoef,
                              precision_score, recall_score, roc_auc_score)
 
-MODEL_DIR = "model"
+MODEL_FOLDER = "model"
 
-st.set_page_config(page_title="Classifier Comparison", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Student Outcome Classifier",
+                   page_icon="\U0001F393", layout="wide")
 
 
 @st.cache_resource
-def load_models():
-    """Load every saved pipeline plus the target label encoder."""
-    pipelines = {}
-    for path in sorted(glob.glob(os.path.join(MODEL_DIR, "*.joblib"))):
-        name = os.path.splitext(os.path.basename(path))[0]
-        if name == "label_encoder":
+def load_everything():
+    # Grab every saved model, skipping the label encoder file.
+    models = {}
+    for file in sorted(glob.glob(os.path.join(MODEL_FOLDER, "*.joblib"))):
+        key = os.path.splitext(os.path.basename(file))[0]
+        if key == "target_map":
             continue
-        pipelines[name.replace("_", " ").title()] = joblib.load(path)
+        models[key.replace("_", " ").title()] = joblib.load(file)
 
-    enc_path = os.path.join(MODEL_DIR, "label_encoder.joblib")
-    encoder = joblib.load(enc_path) if os.path.exists(enc_path) else None
-    return pipelines, encoder
+    # The encoder lets us turn predictions back into Dropout/Enrolled/Graduate.
+    enc_file = os.path.join(MODEL_FOLDER, "target_map.joblib")
+    label_map = joblib.load(enc_file) if os.path.exists(enc_file) else None
+    return models, label_map
 
 
-def compute_metrics(y_true, y_pred, proba, n_classes):
-    average = "binary" if n_classes == 2 else "weighted"
+def all_metrics(y_actual, y_hat, probs, num_classes):
+    # Compute the six metrics for one model.
+    avg = "binary" if num_classes == 2 else "weighted"
     try:
-        auc = (roc_auc_score(y_true, proba[:, 1]) if n_classes == 2
-               else roc_auc_score(y_true, proba, multi_class="ovr", average="macro"))
+        auc = (roc_auc_score(y_actual, probs[:, 1]) if num_classes == 2
+               else roc_auc_score(y_actual, probs, multi_class="ovr", average="macro"))
     except Exception:
         auc = float("nan")
 
     return {
-        "Accuracy": accuracy_score(y_true, y_pred),
+        "Accuracy": accuracy_score(y_actual, y_hat),
         "AUC": auc,
-        "Precision": precision_score(y_true, y_pred, average=average, zero_division=0),
-        "Recall": recall_score(y_true, y_pred, average=average, zero_division=0),
-        "F1": f1_score(y_true, y_pred, average=average, zero_division=0),
-        "MCC": matthews_corrcoef(y_true, y_pred),
+        "Precision": precision_score(y_actual, y_hat, average=avg, zero_division=0),
+        "Recall": recall_score(y_actual, y_hat, average=avg, zero_division=0),
+        "F1": f1_score(y_actual, y_hat, average=avg, zero_division=0),
+        "MCC": matthews_corrcoef(y_actual, y_hat),
     }
 
 
-st.title("Classification Model Explorer")
-st.caption("Upload your test CSV, pick a model, and inspect its performance.")
+st.title("Student Outcome Classifier")
+st.caption("Will a student drop out, stay enrolled, or graduate? Compare six models below.")
 
-pipelines, encoder = load_models()
-if not pipelines:
+models, label_map = load_everything()
+if not models:
     st.error("No models found in model/. Run train_models.py first.")
     st.stop()
 
-# ---------------------------- Sidebar ----------------------------
+# ---- sidebar controls ----
 with st.sidebar:
     st.header("Controls")
-    uploaded = st.file_uploader("Test data (CSV)", type=["csv"])
-    chosen = st.selectbox("Model", list(pipelines.keys()))
+    file_in = st.file_uploader("Upload test data (CSV)", type=["csv"])
+    model_choice = st.selectbox("Pick a model", list(models.keys()))
     st.divider()
-    st.write("Models available:", len(pipelines))
+    st.metric("Models loaded", len(models))
 
-if uploaded is None:
-    st.info("Upload a CSV in the sidebar to begin. Use the `test_data.csv` from the repo.")
+if file_in is None:
+    st.info("Upload test_data.csv from the sidebar to get started.")
     st.stop()
 
-df = pd.read_csv(uploaded)
+data = pd.read_csv(file_in)
 st.subheader("Uploaded data")
-st.write(f"{df.shape[0]} rows, {df.shape[1]} columns")
-st.dataframe(df.head(10), use_container_width=True)
+st.write(f"{data.shape[0]} rows, {data.shape[1]} columns")
+st.dataframe(data.head(10), use_container_width=True)
 
-target_col = st.selectbox(
-    "Which column holds the true label?",
-    df.columns.tolist(),
-    index=len(df.columns) - 1,
-)
+# let the user say which column is the answer
+outcome_col = st.selectbox("Which column is the true outcome?",
+                           data.columns.tolist(),
+                           index=len(data.columns) - 1)
 
-X = df.drop(columns=[target_col])
-y_true_raw = df[target_col]
-y_true = encoder.transform(y_true_raw) if encoder is not None else y_true_raw.values
-class_names = list(encoder.classes_) if encoder is not None else sorted(np.unique(y_true))
-n_classes = len(class_names)
+X = data.drop(columns=[outcome_col])
+y_words = data[outcome_col]
+y = label_map.transform(y_words) if label_map is not None else y_words.values
+classes = list(label_map.classes_) if label_map is not None else sorted(np.unique(y))
+num_classes = len(classes)
 
-pipe = pipelines[chosen]
+chosen_model = models[model_choice]
 
 try:
-    y_pred = pipe.predict(X)
-    proba = pipe.predict_proba(X)
-except Exception as err:
-    st.error(f"Prediction failed -- do the uploaded columns match the training data?\n\n{err}")
+    y_hat = chosen_model.predict(X)
+    probs = chosen_model.predict_proba(X)
+except Exception as e:
+    st.error(f"Prediction failed -- do the columns match the training data?\n\n{e}")
     st.stop()
 
-# ---------------------------- Metrics ----------------------------
-st.subheader(f"Evaluation metrics -- {chosen}")
-metrics = compute_metrics(y_true, y_pred, proba, n_classes)
+# ---- metrics for the chosen model ----
+st.subheader(f"Metrics -- {model_choice}")
+scores = all_metrics(y, y_hat, probs, num_classes)
 
-cols = st.columns(6)
-for col, (label, value) in zip(cols, metrics.items()):
-    col.metric(label, "n/a" if pd.isna(value) else f"{value:.3f}")
+metric_cols = st.columns(6)
+for box, (label, val) in zip(metric_cols, scores.items()):
+    box.metric(label, "n/a" if pd.isna(val) else f"{val:.3f}")
 
-# --------------------- Confusion matrix + report -------------------
-left, right = st.columns([1, 1])
+# ---- confusion matrix + report side by side ----
+col_a, col_b = st.columns(2)
 
-with left:
+with col_a:
     st.subheader("Confusion matrix")
-    cm = confusion_matrix(y_true, y_pred)
+    cmatrix = confusion_matrix(y, y_hat)
     fig, ax = plt.subplots(figsize=(5, 4))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
-                xticklabels=class_names, yticklabels=class_names, ax=ax)
+    sns.heatmap(cmatrix, annot=True, fmt="d", cmap="viridis", cbar=False,
+                xticklabels=classes, yticklabels=classes, ax=ax)
     ax.set_xlabel("Predicted")
     ax.set_ylabel("Actual")
     st.pyplot(fig)
 
-with right:
+with col_b:
     st.subheader("Classification report")
-    report = classification_report(
-        y_true, y_pred, target_names=[str(c) for c in class_names],
-        output_dict=True, zero_division=0,
-    )
-    st.dataframe(pd.DataFrame(report).transpose().round(3), use_container_width=True)
+    rep = classification_report(y, y_hat, target_names=[str(c) for c in classes],
+                                output_dict=True, zero_division=0)
+    st.dataframe(pd.DataFrame(rep).transpose().round(3), use_container_width=True)
 
-# ------------------------ All-model comparison ---------------------
+# ---- run every model so we can compare them ----
 st.subheader("All models on this test set")
-rows = []
-for name, p in pipelines.items():
+table = []
+for name, m in models.items():
     try:
-        m = compute_metrics(y_true, p.predict(X), p.predict_proba(X), n_classes)
-        rows.append({"ML Model Name": name, **m})
+        row = all_metrics(y, m.predict(X), m.predict_proba(X), num_classes)
+        table.append({"ML Model Name": name, **row})
     except Exception:
         continue
+compare_df = pd.DataFrame(table).round(4)
+st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
-comparison = pd.DataFrame(rows).round(4)
-st.dataframe(comparison, use_container_width=True, hide_index=True)
+# ---- my own addition: a quick bar chart of F1 across models ----
+st.subheader("F1 score by model")
+if not compare_df.empty:
+    chart_fig, chart_ax = plt.subplots(figsize=(7, 3.5))
+    ordered = compare_df.sort_values("F1", ascending=True)
+    chart_ax.barh(ordered["ML Model Name"], ordered["F1"], color="#4C72B0")
+    chart_ax.set_xlabel("F1 score")
+    chart_ax.set_xlim(0, 1)
+    for i, v in enumerate(ordered["F1"]):
+        chart_ax.text(v + 0.01, i, f"{v:.2f}", va="center", fontsize=8)
+    st.pyplot(chart_fig)
 
+# ---- show predictions and let the user download them ----
 st.subheader("Predictions")
-preview = X.copy()
-preview["Actual"] = y_true_raw.values
-preview["Predicted"] = (encoder.inverse_transform(y_pred) if encoder is not None else y_pred)
-st.dataframe(preview.head(50), use_container_width=True)
-st.download_button("Download predictions", preview.to_csv(index=False),
+out = X.copy()
+out["Actual"] = y_words.values
+out["Predicted"] = (label_map.inverse_transform(y_hat) if label_map is not None else y_hat)
+st.dataframe(out.head(50), use_container_width=True)
+st.download_button("Download predictions", out.to_csv(index=False),
                    "predictions.csv", "text/csv")
