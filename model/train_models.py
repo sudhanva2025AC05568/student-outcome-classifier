@@ -1,16 +1,16 @@
 """
-ML Assignment 2 -- train and evaluate classification models.
+Student outcome classification - model training and evaluation.
 
-HOW TO USE
-1. Put your dataset CSV somewhere (e.g. data/raw_dataset.csv)
-2. Edit the CONFIG block below (DATA_PATH, TARGET_COL, DROP_COLS)
-3. Run:  python train_models.py
+Workflow:
+    1. Place the dataset at data/raw_dataset.csv
+    2. Adjust the settings block (source_file, label_column)
+    3. Run:  py model/train_models.py
 
-Outputs:
-  model/<model_name>.joblib   -- full pipeline (preprocessing + classifier)
-  model/label_encoder.joblib  -- target label encoder
-  test_data.csv               -- held-out test split, for the Streamlit app
-  metrics.csv                 -- comparison table for your README
+Produces:
+    model/*.joblib          fitted pipelines (preprocessing bundled with each classifier)
+    model/target_map.joblib label encoder for the outcome column
+    test_data.csv           hold-out slice used by the Streamlit app
+    metrics.csv             score summary for the README
 """
 
 import os
@@ -35,130 +35,134 @@ from sklearn.tree import DecisionTreeClassifier
 
 warnings.filterwarnings("ignore")
 
-# ----------------------------- CONFIG -----------------------------
-DATA_PATH = "data/raw_dataset.csv"   # your UCI file
-TARGET_COL = "Target"                # <-- was "target", must be capital T
-DROP_COLS = []
-TEST_SIZE = 0.2
-RANDOM_STATE = 42
-MODEL_DIR = "model"
-# ------------------------------------------------------------------
+# ------------------------------- settings -------------------------------
+source_file = "data/raw_dataset.csv"   # downloaded UCI file
+label_column = "Target"                # outcome column in the CSV
+columns_to_remove = []                 # any id-style columns to discard
+holdout_fraction = 0.2
+seed = 42
+output_folder = "model"
+# ------------------------------------------------------------------------
 
 
-def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
-    """Impute + scale numeric columns, impute + one-hot encode categorical ones."""
-    numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
-    categorical_cols = [c for c in X.columns if c not in numeric_cols]
+def make_feature_pipeline(features_frame):
+    """Numeric columns: median-fill then standardise.
+       Categorical columns: mode-fill then one-hot."""
+    number_columns = features_frame.select_dtypes(include=np.number).columns.tolist()
+    text_columns = [col for col in features_frame.columns if col not in number_columns]
 
-    numeric_pipe = Pipeline([
-        ("impute", SimpleImputer(strategy="median")),
-        ("scale", StandardScaler()),
+    number_branch = Pipeline([
+        ("fill_gaps", SimpleImputer(strategy="median")),
+        ("standardise", StandardScaler()),
     ])
 
-    # sparse_output was named `sparse` before scikit-learn 1.2
+    # argument name changed across scikit-learn versions
     try:
-        ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+        encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     except TypeError:
-        ohe = OneHotEncoder(handle_unknown="ignore", sparse=False)
+        encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
 
-    categorical_pipe = Pipeline([
-        ("impute", SimpleImputer(strategy="most_frequent")),
-        ("encode", ohe),
+    text_branch = Pipeline([
+        ("fill_gaps", SimpleImputer(strategy="most_frequent")),
+        ("one_hot", encoder),
     ])
 
     return ColumnTransformer([
-        ("num", numeric_pipe, numeric_cols),
-        ("cat", categorical_pipe, categorical_cols),
+        ("numbers", number_branch, number_columns),
+        ("categories", text_branch, text_columns),
     ])
 
 
-def auc_score(y_true, proba, n_classes: int) -> float:
-    """ROC-AUC for both the binary and the multi-class case."""
+def compute_auc(truth, class_probs, class_count):
+    """Area under ROC, handling binary and multiclass separately."""
     try:
-        if n_classes == 2:
-            return roc_auc_score(y_true, proba[:, 1])
-        return roc_auc_score(y_true, proba, multi_class="ovr", average="macro")
+        if class_count == 2:
+            return roc_auc_score(truth, class_probs[:, 1])
+        return roc_auc_score(truth, class_probs, multi_class="ovr", average="macro")
     except Exception:
         return float("nan")
 
 
-def evaluate(name, pipe, X_test, y_test, n_classes):
-    y_pred = pipe.predict(X_test)
-    proba = pipe.predict_proba(X_test)
-    average = "binary" if n_classes == 2 else "weighted"
+def score_model(model_label, fitted_pipeline, features_test, truth_test, class_count):
+    predictions = fitted_pipeline.predict(features_test)
+    class_probs = fitted_pipeline.predict_proba(features_test)
+    averaging = "binary" if class_count == 2 else "weighted"
 
     return {
-        "ML Model Name": name,
-        "Accuracy": accuracy_score(y_test, y_pred),
-        "AUC": auc_score(y_test, proba, n_classes),
-        "Precision": precision_score(y_test, y_pred, average=average, zero_division=0),
-        "Recall": recall_score(y_test, y_pred, average=average, zero_division=0),
-        "F1": f1_score(y_test, y_pred, average=average, zero_division=0),
-        "MCC": matthews_corrcoef(y_test, y_pred),
+        "ML Model Name": model_label,
+        "Accuracy": accuracy_score(truth_test, predictions),
+        "AUC": compute_auc(truth_test, class_probs, class_count),
+        "Precision": precision_score(truth_test, predictions, average=averaging, zero_division=0),
+        "Recall": recall_score(truth_test, predictions, average=averaging, zero_division=0),
+        "F1": f1_score(truth_test, predictions, average=averaging, zero_division=0),
+        "MCC": matthews_corrcoef(truth_test, predictions),
     }
 
 
-def main():
-    os.makedirs(MODEL_DIR, exist_ok=True)
+def run():
+    os.makedirs(output_folder, exist_ok=True)
 
-    df = pd.read_csv(DATA_PATH, sep=";")
-    if DROP_COLS:
-        df = df.drop(columns=[c for c in DROP_COLS if c in df.columns])
-    df = df.dropna(subset=[TARGET_COL])
+    dataset = pd.read_csv(source_file, sep=";")
+    if columns_to_remove:
+        dataset = dataset.drop(columns=[c for c in columns_to_remove if c in dataset.columns])
+    dataset = dataset.dropna(subset=[label_column])
 
-    print(f"Loaded {df.shape[0]} rows x {df.shape[1] - 1} features")
-    if df.shape[0] < 500 or (df.shape[1] - 1) < 12:
-        print("WARNING: assignment requires >= 500 instances and >= 12 features.")
+    print(f"Loaded {dataset.shape[0]} rows x {dataset.shape[1] - 1} features")
+    if dataset.shape[0] < 500 or (dataset.shape[1] - 1) < 12:
+        print("WARNING: needs >= 500 instances and >= 12 features.")
 
-    X = df.drop(columns=[TARGET_COL])
-    y_raw = df[TARGET_COL]
+    features = dataset.drop(columns=[label_column])
+    outcome_text = dataset[label_column]
 
-    label_encoder = LabelEncoder()
-    y = label_encoder.fit_transform(y_raw)
-    n_classes = len(label_encoder.classes_)
-    print(f"Target classes ({n_classes}): {list(label_encoder.classes_)}")
+    target_map = LabelEncoder()
+    outcome = target_map.fit_transform(outcome_text)
+    class_count = len(target_map.classes_)
+    print(f"Outcome classes ({class_count}): {list(target_map.classes_)}")
 
-    stratify = y if np.min(np.bincount(y)) >= 2 else None
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=stratify
+    keep_ratio = outcome if np.min(np.bincount(outcome)) >= 2 else None
+    features_train, features_test, outcome_train, outcome_test = train_test_split(
+        features, outcome, test_size=holdout_fraction, random_state=seed, stratify=keep_ratio
     )
 
-    # Save the held-out split for the Streamlit app (original labels, not encoded)
-    test_export = X_test.copy()
-    test_export[TARGET_COL] = label_encoder.inverse_transform(y_test)
-    test_export.to_csv("test_data.csv", index=False)
-    print(f"Wrote test_data.csv ({len(test_export)} rows)")
+    # Persist the hold-out slice (original text labels) for the app.
+    holdout = features_test.copy()
+    holdout[label_column] = target_map.inverse_transform(outcome_test)
+    holdout.to_csv("test_data.csv", index=False)
+    print(f"Wrote test_data.csv ({len(holdout)} rows)")
 
-    models = {
-        "Logistic Regression": LogisticRegression(max_iter=2000, random_state=RANDOM_STATE),
-        "Decision Tree": DecisionTreeClassifier(max_depth=8, random_state=RANDOM_STATE),
+    classifiers = {
+        "Logistic Regression": LogisticRegression(max_iter=2000, random_state=seed),
+        "Decision Tree": DecisionTreeClassifier(max_depth=8, random_state=seed),
         "kNN": KNeighborsClassifier(n_neighbors=7),
         "Naive Bayes": GaussianNB(),
-        "Random Forest": RandomForestClassifier(n_estimators=300, random_state=RANDOM_STATE),
-        "Gradient Boosting": GradientBoostingClassifier(random_state=RANDOM_STATE),
+        "Random Forest": RandomForestClassifier(n_estimators=300, random_state=seed),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=seed),
     }
 
-    rows = []
-    for name, clf in models.items():
-        pipe = Pipeline([("prep", build_preprocessor(X_train)), ("clf", clf)])
-        pipe.fit(X_train, y_train)
+    summary = []
+    for model_label, estimator in classifiers.items():
+        pipeline = Pipeline([
+            ("prepare", make_feature_pipeline(features_train)),
+            ("model", estimator),
+        ])
+        pipeline.fit(features_train, outcome_train)
 
-        rows.append(evaluate(name, pipe, X_test, y_test, n_classes))
+        summary.append(score_model(model_label, pipeline, features_test, outcome_test, class_count))
 
-        fname = name.lower().replace(" ", "_") + ".joblib"
-        joblib.dump(pipe, os.path.join(MODEL_DIR, fname))
-        print(f"  trained + saved: {fname}")
+        saved_name = model_label.lower().replace(" ", "_") + ".joblib"
+        joblib.dump(pipeline, os.path.join(output_folder, saved_name))
+        print(f"  trained + saved: {saved_name}")
 
-    joblib.dump(label_encoder, os.path.join(MODEL_DIR, "label_encoder.joblib"))
+    joblib.dump(target_map, os.path.join(output_folder, "target_map.joblib"))
 
-    results = pd.DataFrame(rows).round(4)
-    results.to_csv("metrics.csv", index=False)
+    score_table = pd.DataFrame(summary).round(4)
+    score_table.to_csv("metrics.csv", index=False)
 
     print("\n=== Comparison Table (paste into README.md) ===")
-    print(results.to_markdown(index=False))
-    best = results.loc[results["F1"].idxmax(), "ML Model Name"]
-    print(f"\nHighest F1: {best}")
+    print(score_table.to_markdown(index=False))
+    top = score_table.loc[score_table["F1"].idxmax(), "ML Model Name"]
+    print(f"\nHighest F1: {top}")
 
 
 if __name__ == "__main__":
-    main()
+    run()
