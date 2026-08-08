@@ -34,7 +34,9 @@ def load_everything():
         key = os.path.splitext(os.path.basename(file))[0]
         if key == "target_map":
             continue
-        models[key.replace("_", " ").title()] = joblib.load(file)
+        # tidy up the display name; keep kNN spelled the usual way
+        nice_name = key.replace("_", " ").title().replace("Knn", "kNN")
+        models[nice_name] = joblib.load(file)
 
     # The encoder lets us turn predictions back into Dropout/Enrolled/Graduate.
     enc_file = os.path.join(MODEL_FOLDER, "target_map.joblib")
@@ -157,11 +159,9 @@ if not compare_df.empty:
         chart_ax.text(v + 0.01, i, f"{v:.2f}", va="center", fontsize=8)
     st.pyplot(chart_fig)
 
-# ---- show predictions and let the user download them ----
+# ---- show predictions ----
 st.subheader("Predictions")
 out = X.copy()
 out["Actual"] = y_words.values
 out["Predicted"] = (label_map.inverse_transform(y_hat) if label_map is not None else y_hat)
 st.dataframe(out.head(50), use_container_width=True)
-st.download_button("Download predictions", out.to_csv(index=False),
-                   "predictions.csv", "text/csv")
