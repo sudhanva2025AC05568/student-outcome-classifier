@@ -1,44 +1,51 @@
 # Student Outcome Classifier
 
-M.Tech (AIML/DSE) — Machine Learning — Assignment 2
+M.Tech (AIML) - Machine Learning - Assignment 2
 **Name:** SUDHANVA S A  |  **BITS ID:** 2025AC05568
 
-- **Live Streamlit app:** https://student-outcome-classifier-gyeofgb4xk59585mm4pvhm.streamlit.app/
-- **GitHub repository:** https://github.com/sudhanva2025AC05568/student-outcome-classifier
+- **Live app:** https://student-outcome-classifier-gyeofgb4xk59585mm4pvhm.streamlit.app/
+- **GitHub:** https://github.com/sudhanva2025AC05568/student-outcome-classifier
 
 ---
 
 ## a. Problem statement
 
-This project predicts whether a student will end up as a **Dropout**, stay **Enrolled**, or **Graduate**, based on details known about them at admission and after their first two semesters. It is a multi-class classification problem with three classes.
+In this project I try to predict what happens to a student at the end - whether they will
+**drop out**, stay **enrolled**, or **graduate**. Since there are three possible outcomes, this
+is a multi-class classification problem.
 
-I picked this problem because student dropout is something colleges genuinely care about, and if a model can flag the students who are likely to leave, the college gets a chance to help them before it happens. That practical angle made it more interesting to me than a generic dataset.
+I chose this problem because dropout is a real issue for colleges. If we can predict early
+which students might leave, the college can try to help them in time.
 
 ## b. Dataset description
 
 | Item | Detail |
 |---|---|
-| Source | UCI Machine Learning Repository, dataset ID 697 (Realinho et al., 2021) |
-| URL | https://archive.ics.uci.edu/dataset/697/predict+students+dropout+and+academic+success |
-| Instances | 4,424 |
-| Features | 36 |
-| Target column | `Target` → Dropout / Enrolled / Graduate |
-| Problem type | Multi-class classification (3 classes) |
-| Class balance | Graduate ≈ 50%, Dropout ≈ 32%, Enrolled ≈ 18% (imbalanced) |
-| Missing values | None in the raw file; pipeline imputes anyway as a safeguard |
-| Feature types | Numeric (grades, ages, economic indicators) and categorical (course, marital status, nationality) |
+| Source | UCI Machine Learning Repository, dataset ID 697 |
+| Link | https://archive.ics.uci.edu/dataset/697/predict+students+dropout+and+academic+success |
+| Number of rows | 4,424 |
+| Number of features | 36 |
+| Target column | `Target` (Dropout / Enrolled / Graduate) |
+| Type of problem | Multi-class classification (3 classes) |
+| Class balance | Graduate around 50%, Dropout around 32%, Enrolled around 18% |
+| Missing values | None, but the code still handles them just in case |
+| Feature types | Some are numbers (like grades and age) and some are categories (like course and nationality) |
 
-The columns cover the student's background, their academic path, and their first- and second-semester results. In practice the semester grades and units-passed columns carried most of the predictive signal.
+The data has information about the student's background, their course, and their marks in the
+first two semesters. The semester marks turned out to be the most useful for prediction.
 
 ## c. GitHub repository link
 
 https://github.com/sudhanva2025AC05568/student-outcome-classifier
 
-Contains `app.py`, `requirements.txt`, `README.md`, `test_data.csv`, and a `model/` folder with the training script and all saved models.
+The repo has the code (`app.py`, `train_models.py`), `requirements.txt`, `README.md`,
+`test_data.csv`, and the `model` folder with the saved models.
 
 ## d. Models used
 
-All six models use the same 80/20 stratified split (`random_state=42`) and the same preprocessing: median fill + scaling for numeric columns, most-frequent fill + one-hot encoding for categorical ones. The preprocessing is kept inside each model's pipeline so the test set is only ever transformed with values learned from the training set.
+I trained all six models on the same data. I split the data into 80% for training and 20% for
+testing, and kept the same split for every model so the comparison is fair. Before training, I
+filled missing values, scaled the number columns, and one-hot encoded the category columns.
 
 ### Comparison table
 
@@ -53,38 +60,33 @@ All six models use the same 80/20 stratified split (`random_state=42`) and the s
 
 ### Observations
 
-| ML Model Name | Observation about model performance |
+| ML Model Name | Observation |
 |---|---|
-| Logistic Regression | Did better than I expected for such a simple model — came second on F1 and MCC. Looks like the classes can be separated fairly well with a straight boundary. |
-| Decision Tree | Okay but not great. A single tree picks up some patterns but overfits, so even after limiting its depth it stayed behind the ensemble models. |
-| kNN | One of the two weakest. After one-hot encoding there are a lot of columns, and distance-based methods don't work as well in that many dimensions. The small Enrolled class also gets outvoted by its neighbours. |
-| Naive Bayes | Weakest overall. It assumes the features are independent, which isn't true here since grades and units passed clearly move together, so its predictions suffer. Its AUC is still okay though. |
-| Random Forest | Best model for this dataset — top on Accuracy, F1 and MCC. Averaging many trees cancels out the overfitting a single tree had. |
-| Gradient Boosting | Nearly tied with Random Forest and actually had the best AUC. Its F1 was slightly lower, so I kept Random Forest as the winner. |
-| **Overall winner for this dataset** | **Random Forest** — highest F1 (0.757) and MCC (0.621). I went by MCC because the classes are imbalanced and MCC handles that better than accuracy. |
+| Logistic Regression | Worked really well even though it is a simple model. It came second in F1 and MCC. |
+| Decision Tree | It was average. A single tree tends to overfit, so it did worse than the forest models. |
+| kNN | One of the weakest. After one-hot encoding there are too many columns, and kNN does not work well when there are many columns. |
+| Naive Bayes | The weakest one. It assumes all features are independent, but here they are not (like grades and units passed are related). |
+| Random Forest | The best model. It uses many trees together, so it does not overfit like a single tree. |
+| Gradient Boosting | Almost as good as Random Forest and had the best AUC, but its F1 was a little lower. |
+| Overall winner | **Random Forest** - it had the best F1 and MCC. I chose based on MCC because the classes are imbalanced. |
 
-One thing common to every model: they all handle Graduate and Dropout well but struggle with the Enrolled class. That makes sense to me, since an "Enrolled" student is still mid-course and could realistically end up in either of the other two groups.
+All the models did better than just guessing the biggest class (which would give around 50%).
+Every model was good at predicting Graduate and Dropout, but all of them found the Enrolled
+class hard. This makes sense because an enrolled student is still studying and could still
+drop out or graduate later.
 
-## Challenges faced
+## Challenges I faced
 
-The part that took the most time was deployment. Everything worked on my laptop, but the Streamlit Cloud app kept failing. First it couldn't import `joblib` because the build was using a very new Python version that skipped some packages. After I got past that, the models refused to load with a version-mismatch error — I had trained them on a newer scikit-learn than the one Cloud installed. I fixed it by pinning scikit-learn in `requirements.txt` to the same version the models were trained on. I also learned that Streamlit Cloud ignores `runtime.txt`, so the Python version has to be chosen in the Advanced settings when deploying. Getting the CSV separator right (the UCI file uses `;`) and keeping the joblib filenames identical between the training script and the app were two smaller things that also tripped me up early on.
+The hardest part was deploying the app. It worked fine on my laptop but kept failing on
+Streamlit Cloud. First it could not find `joblib`, and then the models would not load because
+Streamlit was using a different scikit-learn version than the one I trained with. I fixed it by
+setting the same scikit-learn version in `requirements.txt`. I also learned that Streamlit
+ignores `runtime.txt`, so the Python version has to be chosen in the Advanced settings while
+deploying. Two smaller things that confused me early were the CSV separator (the UCI file uses
+`;` instead of `,`) and making sure the saved model file names matched exactly in both the
+training code and the app.
 
-## Repository structure
-
-```
-student-outcome-classifier/
-├── app.py                 # Streamlit application
-├── requirements.txt
-├── README.md
-├── test_data.csv          # 20% held-out test split (885 rows)
-├── metrics.csv            # generated comparison table
-└── model/
-    ├── train_models.py    # training + evaluation script
-    ├── *.joblib           # saved pipelines for all six models
-    └── target_map.joblib  # outcome label encoder
-```
-
-## How to run locally
+## How to run it
 
 ```bash
 pip install -r requirements.txt
@@ -92,12 +94,11 @@ py model/train_models.py
 py -m streamlit run app.py
 ```
 
-## Streamlit app features
+## What the app can do
 
-- CSV upload for test data
-- Model selection dropdown
-- All six evaluation metrics per model
-- Confusion matrix heatmap and classification report
-- Comparison of every model on the uploaded test set
-- F1-score bar chart across models
-- Downloadable predictions
+- Upload a test CSV file
+- Pick a model from a dropdown
+- See all six metrics for that model
+- See the confusion matrix and classification report
+- Compare all models together
+- See an F1 score bar chart
