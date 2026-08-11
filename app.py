@@ -65,6 +65,7 @@ def all_metrics(y_actual, y_hat, probs, num_classes):
 
 st.title("Student Outcome Classifier")
 st.caption("Will a student drop out, stay enrolled, or graduate? Compare six models below.")
+st.caption("by SUDHANVA S A (2025AC05568) — M.Tech AIML, Assignment 2")
 
 models, label_map = load_everything()
 if not models:
