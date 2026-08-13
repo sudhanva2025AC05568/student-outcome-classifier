@@ -30,7 +30,7 @@ I chose this problem because dropout is a real issue for colleges. If we can pre
 | Missing values | None, but the code still handles them just in case |
 | Feature types | Some are numbers (like grades and age) and some are categories (like course and nationality) |
 
-The data has information about each student's background, their course, and their marks in the first two semesters. The semester marks turned out to be the most useful features for prediction.
+The dataset includes information about students’ background, course, and marks from the first two semesters, which are used as input features for prediction.
 
 ## c. GitHub repository link
 
