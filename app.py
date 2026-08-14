@@ -179,8 +179,15 @@ if not compare_df.empty:
         chart_ax.text(v + 0.01, i, f"{v:.2f}", va="center", fontsize=8)
     st.pyplot(chart_fig)
 
-st.subheader("Predictions")
-out = X.copy()
-out["Actual"] = y_words.values
-out["Predicted"] = (label_map.inverse_transform(y_hat) if label_map is not None else y_hat)
+st.subheader("Predictions vs Actual")
+out = pd.DataFrame({
+    "Actual": y_words.values,
+    "Predicted": label_map.inverse_transform(y_hat) if label_map is not None else y_hat,
+})
+match_bool = out["Actual"] == out["Predicted"]
+out["Match"] = np.where(match_bool, "✅", "❌")
+
+correct = int(match_bool.sum())
+total = len(out)
+st.write(f"**Correctly predicted:** {correct} / {total} ({correct/total:.1%})")
 st.dataframe(out.head(50), use_container_width=True)
