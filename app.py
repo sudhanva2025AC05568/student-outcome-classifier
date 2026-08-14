@@ -59,9 +59,10 @@ def all_metrics(y_actual, y_hat, probs, num_classes):
     }
 
 
-st.title("Student Outcome Classifier")
-st.caption("Will a student drop out, stay enrolled, or graduate? Compare six models below.")
-st.caption("by SUDHANVA S A (2025AC05568) M.Tech AIML, Assignment 2")
+st.markdown("<h1 style='color:#4C72B0;'>🎓 Student Outcome Classifier</h1>", unsafe_allow_html=True)
+st.markdown("<p style='font-size:16px; color:#555;'>Will a student drop out, stay enrolled, or graduate? Compare six models below.</p>", unsafe_allow_html=True)
+st.markdown("<p style='color:#2E8B57; font-weight:bold;'>Six supervised models • UCI Student Dropout Dataset (ID 697) • 36 features • 3 classes</p>", unsafe_allow_html=True)
+st.markdown("<p style='color:#888; font-style:italic;'>by SUDHANVA S A (2025AC05568) — M.Tech AIML, Assignment 2</p>", unsafe_allow_html=True)
 
 models, label_map = load_everything()
 if not models:
@@ -87,6 +88,7 @@ with st.sidebar:
             key="model_picker",
         )
         apply_model = st.form_submit_button("Apply Model")
+        st.caption("Click **Apply Model** to load results")
 
     if apply_model:
         st.session_state.applied_model = st.session_state.model_picker
@@ -99,18 +101,20 @@ if file_in is None:
     st.stop()
 
 data = pd.read_csv(file_in)
+st.markdown(f"## Current model: `{st.session_state.applied_model}`")
 st.subheader("Uploaded data")
-st.caption(f"Current model: **{st.session_state.applied_model}**")
-st.write(f"{data.shape[0]} rows, {data.shape[1]} columns")
+st.write(f"**Test dataset:** {data.shape[0]} rows × {data.shape[1]} columns (36 features + 1 target)")
 st.dataframe(data.head(10), use_container_width=True)
 
-outcome_col = st.selectbox("Which column is the true outcome?",
-                           data.columns.tolist(),
-                           index=len(data.columns) - 1)
+outcome_col = "Target" if "Target" in data.columns else data.columns[-1]
 
 X = data.drop(columns=[outcome_col])
 y_words = data[outcome_col]
-y = label_map.transform(y_words) if label_map is not None else y_words.values
+try:
+    y = label_map.transform(y_words) if label_map is not None else y_words.values
+except ValueError:
+    st.error("Selected column doesn't look like the outcome. Please select **Target**.")
+    st.stop()
 classes = list(label_map.classes_) if label_map is not None else sorted(np.unique(y))
 num_classes = len(classes)
 
@@ -124,7 +128,7 @@ except Exception as e:
     st.error(f"Prediction failed -- do the columns match the training data?\n\n{e}")
     st.stop()
 
-st.subheader(f"Metrics -- {model_choice}")
+st.subheader(f"Evaluation Metrics -- {model_choice}")
 scores = all_metrics(y, y_hat, probs, num_classes)
 
 metric_cols = st.columns(6)
@@ -149,7 +153,7 @@ with col_b:
                                 output_dict=True, zero_division=0)
     st.dataframe(pd.DataFrame(rep).transpose().round(3), use_container_width=True)
 
-st.subheader("All models on this test set")
+st.subheader("Comparison of all models on the test set")
 table = []
 for name, m in models.items():
     try:
@@ -159,6 +163,10 @@ for name, m in models.items():
         continue
 compare_df = pd.DataFrame(table).round(4)
 st.dataframe(compare_df, use_container_width=True, hide_index=True)
+
+if not compare_df.empty:
+    best = compare_df.loc[compare_df["F1"].idxmax()]
+    st.success(f"🏆 Best on this data: **{best['ML Model Name']}** (F1 = {best['F1']:.4f}, MCC = {best['MCC']:.4f})")
 
 st.subheader("F1 score by model")
 if not compare_df.empty:
